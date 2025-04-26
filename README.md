@@ -56,18 +56,13 @@ jupyter notebook evaluations.ipynb
 ├── saved_results/                # Directory for storing evaluation results
 ├── first_eval_protocol_cora.py   # Evaluate model performance and transition between abstration levels
 ├── eval_proximity_imp.py         # Evaluate smooth transition from node to proximity 
-├── eval_cluster_imp.py           # Evaluate smooth transition from node to cluster 
+├── eval_cluster_imp.py           # Evaluate smooth transition from node to cluster
+├── link_pred_eval.py             # Evaluate link prediction
 ├── data_stats.py                 # Generate data stats
 ├── requirements.txt              # Python dependencies
 └── README.md                     # Project README file
 ```
 
-## Experimental Results
-We provide experimental results for each level of abstraction. Key metrics include:
-- Intrinsic Dimension (ID)
-- Local Intrinsic Dimensionality (LID)
-- Classification accuracy
-- Clustering accuracy
 
 ## Acknowledgments
 This research is part of my master’s degree project. I extend my gratitude to my academic advisors and peers for their invaluable guidance and support.
