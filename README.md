@@ -13,7 +13,7 @@ This repository contains the implementation of my master’s degree research pro
    - Explore the transition between abstraction levels using:
      - Intrinsic Dimension (ID)
      - Local Intrinsic Dimensionality (LID)
-     - Classification and clustering accuracy as downstream tasks
+     - Classification, clustering, and link prediction performance as downstream tasks.
 
 3. **Mitigating Feature Twist Effect:**
    - Address the "feature twist effect" that arises during transitions between abstraction levels.
