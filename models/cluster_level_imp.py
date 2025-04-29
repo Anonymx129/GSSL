@@ -150,7 +150,7 @@ def train_and_extract_ID_LID_cluster_level_imp(
             weight_decay = 0.00001,
             beta1 = 0.25, 
             beta2 = 0.1,
-            rd_seed = 129,
+            rd_seed = 28,
         ):
           
     torch.manual_seed(rd_seed)
@@ -163,7 +163,7 @@ def train_and_extract_ID_LID_cluster_level_imp(
 
     full_model = torch.load(pretrained_model)
     embedding = full_model(data.x, data.edge_index)
-    kmeans = KMeans(n_clusters=num_classes, random_state=28).fit(embedding.detach().cpu())
+    kmeans = KMeans(n_clusters=num_classes, random_state=rd_seed).fit(embedding.detach().cpu())
 
 
     encoder = Encoder(data.num_features, num_hidden, activation, base_model=base_model, k=num_layers).to(device)
@@ -176,6 +176,7 @@ def train_and_extract_ID_LID_cluster_level_imp(
     dict = {'ID_global_mean' : [],
             'LID_mean' : [],
             'accuracy' : [],
+            'nmi': [],
             'kmeans': [],}
 
     previous_unconflicted = []
@@ -230,7 +231,8 @@ def train_and_extract_ID_LID_cluster_level_imp(
         dict['accuracy'].append(res[0])
 
         res_clust = clustering_evaluation(model, data, num_classes)
-        dict['kmeans'].append(res_clust)
+        dict['kmeans'].append(res_clust[0])
+        dict['nmi'].append(res_clust[1])
 
         ID = []
         LID = []
@@ -254,3 +256,130 @@ def train_and_extract_ID_LID_cluster_level_imp(
         visualize(z, data.y, title)
         
     return dict
+
+
+from models.linkpred import *
+from tqdm import tqdm
+
+def link_prediction_evaluation_cluster_level_imp(  
+            data,
+            pretrained_weights = None,
+            pretrained_model = None,
+            learning_rate = 0.0005, 
+            num_hidden = 128, 
+            num_proj_hidden = 128,
+            activation = nn.PReLU(),
+            base_model = GCNConv,
+            num_layers = 2,
+            drop_edge_rate_1 = 0.2,
+            drop_edge_rate_2 = 0.4,
+            drop_feature_rate_1 = 0.3,
+            drop_feature_rate_2 = 0.4,
+            drop_scheme = 'uniform',
+            tau = 0.4,
+            num_epochs = 200,
+            wait=200,
+            weight_decay = 0.00001,
+            beta1 = 0.25, 
+            beta2 = 0.1,
+            num_classes = 7,
+            rd_seed = 129,
+        ):
+          
+    torch.manual_seed(rd_seed)
+    random.seed(rd_seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    data = data.to(device)
+
+    full_model = torch.load(pretrained_model)
+    embedding = full_model(data.x, data.edge_index)
+    kmeans = KMeans(n_clusters=num_classes, random_state=rd_seed).fit(embedding.detach().cpu())
+
+
+    encoder = Encoder(data.num_features, num_hidden, activation, base_model=base_model, k=num_layers).to(device)
+    model = Model(encoder, num_hidden, num_proj_hidden, tau, cluster_centers=torch.tensor(kmeans.cluster_centers_, dtype=torch.float, requires_grad=True)).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
+
+    model.load_state_dict(torch.load(pretrained_weights), strict=False)     
+    
+    split_edge = do_edge_split_direct(data)
+    data.edge_index = to_undirected(split_edge['train']['edge'].t())
+
+    predictor = link_decoder
+
+    best_valid = 0.0
+    best_epoch = 0
+    cnt_wait = 0
+    best_result=0
+
+
+    with tqdm(total=num_epochs, desc='(T)') as pbar:
+
+        previous_unconflicted = []
+        epoch_stable = 0
+        
+        for epoch in range(0, num_epochs):
+            optimizer.zero_grad()
+
+            edge_index_1 = drop_edge(data, device, drop_scheme, drop_edge_rate_1)
+            edge_index_2 = drop_edge(data, device, drop_scheme, drop_edge_rate_2)
+
+            x_1 = drop_feature_global(data, device, drop_scheme, drop_feature_rate_1)
+            x_2 = drop_feature_global(data, device, drop_scheme, drop_feature_rate_2)
+            x_3 = shuffle(data.x)
+
+            z1 = model(x_1, edge_index_1)
+            z2 = model(x_2, edge_index_2)
+            z3 = model(x_3, data.edge_index)
+
+            z = model(data.x, data.edge_index)
+            ct = model.cluster_centers
+            
+            if epoch % 15 == 0 :
+                unconflicted_ind, _ = generate_unconflicted_data_index(z.detach().cpu().numpy(), ct.detach().cpu().numpy(), beta1, beta2)
+                print(len(unconflicted_ind))
+            
+            if len(previous_unconflicted) < len(unconflicted_ind) :
+                z1_unconf = z1[unconflicted_ind]
+                z2_unconf = z2[unconflicted_ind]
+                z3_unconf = z3[unconflicted_ind]
+                
+                previous_unconflicted = unconflicted_ind
+            else:
+                epoch_stable += 1
+                z1_unconf = z1[previous_unconflicted]
+                z2_unconf = z2[previous_unconflicted]
+                z3_unconf = z3[previous_unconflicted]
+            if epoch_stable >= 10:
+                epoch_stable = 0
+                beta1 = beta1 * 0.95 
+                beta2 = beta2 * 0.85
+            
+            loss = model.loss(z1_unconf, z2_unconf, z3_unconf)
+            loss.backward()
+            optimizer.step()
+
+            pbar.set_postfix({'loss': loss})
+            pbar.update()
+            result = test_link_prediction(model, predictor, data, split_edge, num_hidden)
+            valid_hits = result['auc_val']
+            if valid_hits > best_valid:
+                best_valid = valid_hits
+                best_epoch = epoch
+                best_result = result
+                cnt_wait = 0
+            else:
+                cnt_wait += 1
+
+            if cnt_wait == wait:
+                print('Early stopping!')
+                break
+        test_auc = best_result['auc_test']
+
+        print(f'Final result: Epoch:{best_epoch}, auc: {test_auc}' )
+
+    return test_auc
