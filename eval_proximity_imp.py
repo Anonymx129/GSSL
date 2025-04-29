@@ -23,7 +23,7 @@ import pickle
 
 from models.node_level import train_and_extract_ID_LID_node_level
 from models.proximity_level import train_and_extract_ID_LID_proximity_level
-from models.proximity_level_imp import train_and_extract_ID_LID_proximity_level_imp
+from models.proximity_level_imp import train_and_extract_ID_LID_proximity_level_imp, link_prediction_evaluation_proximity_level_imp
 
 #### Models #### 
 nn_cora_300 = train_and_extract_ID_LID_node_level(data = cora, num_epochs=300, title = "Node level embeddings")
@@ -88,3 +88,14 @@ axs[1,1].grid(True)
 fig.legend(loc='upper center', bbox_to_anchor=(0.5, -0.02), ncol=3)
 plt.tight_layout()
 plt.show()
+
+
+
+# Link prediction evaluation 
+link_prediction_evaluation_proximity_level_imp(cora, 
+                                      num_hidden = 128, 
+                                      num_proj_hidden = 128,
+                                      pretrained_weights = 'pretrained_models/cora/weights/node.pth', 
+                                      num_layers = 2, 
+                                      num_epochs = 300, 
+                                      weight_decay = 0.00001)
