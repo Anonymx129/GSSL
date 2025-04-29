@@ -16,14 +16,14 @@ cora = cora_data[0]
 
 import pandas as pd
 import matplotlib.pyplot as plt 
-from models.cluster_level_imp import train_and_extract_ID_LID_cluster_level_imp
+from models.cluster_level_imp import train_and_extract_ID_LID_cluster_level_imp, link_prediction_evaluation_cluster_level_imp
 from models.node_level import train_and_extract_ID_LID_node_level
 
 nn_cc = train_and_extract_ID_LID_cluster_level_imp(data = cora, 
                                                    pretrained_weights = 'pretrained_models/cora/weights/node.pth', 
                                                    pretrained_model = 'pretrained_models/cora/full_model/node.pth', 
                                                    num_epochs=200)
-
+ 
 
 
 nodelevel = train_and_extract_ID_LID_node_level(data = cora)
@@ -56,3 +56,13 @@ axs[3].set_title('Clustering accuracy kmeans')
 axs[3].grid(True)
 plt.tight_layout()
 plt.show()
+
+
+link_prediction_evaluation_cluster_level_imp(cora,    
+                                        pretrained_weights = 'pretrained_models/cora/weights/node.pth', 
+                                        pretrained_model = 'pretrained_models/cora/full_model/node.pth',        
+                                        num_hidden = 128, 
+                                        num_proj_hidden = 128, 
+                                        num_layers = 2, 
+                                        num_epochs = 200, 
+                                        weight_decay = 0.00001)
