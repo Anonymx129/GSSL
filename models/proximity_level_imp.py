@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv 
 
 from sklearn.metrics.pairwise import euclidean_distances
 import numpy as np
@@ -163,6 +163,7 @@ def train_and_extract_ID_LID_proximity_level_imp(
     dict = {'ID_global_mean' : [],
             'LID_mean' : [],
             'accuracy' : [],
+            'nmi' : [],
             'kmeans': []}
     
     for epoch in range(1, num_epochs + 1):
@@ -190,7 +191,8 @@ def train_and_extract_ID_LID_proximity_level_imp(
         dict['accuracy'].append(res[0])
 
         res_clust = clustering_evaluation(model, data, num_classes)
-        dict['kmeans'].append(res_clust)
+        dict['kmeans'].append(res_clust[0])
+        dict['nmi'].append(res_clust[1])
 
         ID = []
         LID = []
@@ -214,3 +216,108 @@ def train_and_extract_ID_LID_proximity_level_imp(
         visualize(z, data.y, title)
              
     return dict
+
+
+from models.linkpred import *
+from tqdm import tqdm
+
+def link_prediction_evaluation_proximity_level_imp(  
+            data,
+            pretrained_weights = None, 
+            learning_rate = 0.0005, 
+            num_hidden = 128, 
+            num_proj_hidden = 128,
+            activation = nn.PReLU(),
+            base_model = GCNConv,
+            num_layers = 2,
+            drop_edge_rate_1 = 0.2,
+            drop_edge_rate_2 = 0.4,
+            drop_feature_rate_1 = 0.3,
+            drop_feature_rate_2 = 0.4,
+            drop_scheme = 'uniform',
+            tau = 0.4,
+            walk_length = 5,
+            p = 1,
+            q = 1,
+            disk = 0.45,
+            num_epochs = 200,
+            wait=200,
+            weight_decay = 0.00001,
+            rd_seed = 129,
+        ):
+    
+    torch.manual_seed(rd_seed)
+    random.seed(rd_seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    data = data.to(device)
+
+
+    encoder = Encoder(data.num_features, num_hidden, activation, base_model=base_model, k=num_layers).to(device)
+    
+    if data.has_isolated_nodes():
+        all = torch.arange(start=0, end=data.x.shape[0], step=1, dtype=int).tolist()
+        start = torch.unique(data.edge_index[0]).tolist()
+        isolated = [i for i in all if i not in start]
+        isolated_tensor = torch.Tensor([isolated, isolated])
+        all_nodes = torch.cat((data.edge_index, isolated_tensor), dim = 1).type(torch.int64)
+        all_nodes_sorted = all_nodes[:, all_nodes[0, :].sort()[1]]
+        model = Model(encoder, num_hidden, num_proj_hidden, data.y, all_nodes_sorted, tau, walk_length, p, q, disk).to(device)
+    else: 
+        model = Model(encoder, num_hidden, num_proj_hidden, data.y, data.edge_index, tau, walk_length, p, q, disk).to(device)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay) 
+    model.load_state_dict(torch.load(pretrained_weights)) 
+      
+    
+    split_edge = do_edge_split_direct(data)
+    data.edge_index = to_undirected(split_edge['train']['edge'].t())
+
+    predictor = link_decoder
+
+    best_valid = 0.0
+    best_epoch = 0
+    cnt_wait = 0
+    best_result=0
+
+    with tqdm(total=num_epochs, desc='(T)') as pbar:
+        for epoch in range(1, num_epochs + 1):
+            optimizer.zero_grad()
+
+            edge_index_1 = drop_edge(data, device, drop_scheme, drop_edge_rate_1)
+            edge_index_2 = drop_edge(data, device, drop_scheme, drop_edge_rate_2)
+
+            x_1 = drop_feature_global(data, device, drop_scheme, drop_feature_rate_1)
+            x_2 = drop_feature_global(data, device, drop_scheme, drop_feature_rate_2)
+            x_3 = shuffle(data.x)
+
+            z1 = model(x_1, edge_index_1)
+            z2 = model(x_2, edge_index_2)
+            z3 = model(x_3, data.edge_index)
+
+            loss = model.loss(z1, z2, z3)
+            loss.backward()
+            optimizer.step()
+
+            pbar.set_postfix({'loss': loss})
+            pbar.update()
+            result = test_link_prediction(model, predictor, data, split_edge, num_hidden)
+            valid_hits = result['auc_val']
+            if valid_hits > best_valid:
+                best_valid = valid_hits
+                best_epoch = epoch
+                best_result = result
+                cnt_wait = 0
+            else:
+                cnt_wait += 1
+
+            if cnt_wait == wait:
+                print('Early stopping!')
+                break
+        test_auc = best_result['auc_test']
+
+        print(f'Final result: Epoch:{best_epoch}, auc: {test_auc}' )
+
+    return test_auc
